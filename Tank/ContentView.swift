@@ -2,6 +2,7 @@
 
 import SwiftUI
 import Combine
+import PhotosUI
 
 // MARK: - Models
 enum FuelType: String, Codable, CaseIterable, Identifiable {
@@ -14,7 +15,7 @@ struct CarProfile: Codable, Hashable, Identifiable {
     var make: String = ""
     var model: String = ""
     var carNickname: String = "My Car"
-    var tankCapacity: Double = 51
+    var tankCapacity: Double? = nil
     var fuelType: FuelType = .e10
     var title: String { "\(carNickname) · \(make) \(model)".trimmingCharacters(in: .whitespaces) }
 }
@@ -28,6 +29,7 @@ struct FuelEntry: Codable, Identifiable, Hashable {
     var carId: UUID = UUID()
     var fuelType: FuelType = .e10
     var calculatedEfficiency: Double? = nil
+    var receiptImageData: Data? = nil
     var totalCost: Double { litres * pricePerLitre }
     func efficiency(distanceDriven: Double) -> Double? { litres > 0 && distanceDriven > 0 ? distanceDriven / litres : nil }
 }
@@ -47,8 +49,18 @@ final class FuelStore: ObservableObject {
         if activeCarId == car.id { activeCarId = carProfiles[0].id }
     }
     func addEntry(_ entry: FuelEntry) { entries.append(entry); recalculateEfficiencies(); save() }
+    func updateEntry(_ entry: FuelEntry) { guard let index = entries.firstIndex(where: { $0.id == entry.id }) else { return }; entries[index] = entry; save() }
     func deleteEntry(at offsets: IndexSet, from shown: [FuelEntry]) {
         let ids = offsets.map { shown[$0].id }; entries.removeAll { ids.contains($0.id) }; recalculateEfficiencies(); save()
+    }
+    func vehicleHistory(for carId: UUID) -> [FuelEntry] { entries.filter { $0.carId == carId }.sorted { $0.date > $1.date } }
+    func priorEntry(for entry: FuelEntry) -> FuelEntry? {
+        entries.filter { $0.carId == entry.carId && ($0.date < entry.date || ($0.date == entry.date && $0.id != entry.id)) }.max { $0.date < $1.date }
+    }
+    func vehicleAverageEfficiency(for carId: UUID) -> Double? {
+        let values = entries.filter { $0.carId == carId }.compactMap(\.calculatedEfficiency).filter { $0 > 0 }
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
     }
     private func recalculateEfficiencies() {
         let sorted = entries.sorted { $0.date < $1.date }; var previous: [UUID: Double] = [:]
@@ -104,9 +116,9 @@ struct ContentView: View {
                         }
                         if let activeCar = store.activeCar {
                             Section("\(activeCar.carNickname) Fuel Entries") {
-                                let shown = store.entries.filter { $0.carId == activeCar.id }.sorted { $0.date > $1.date }
+                                let shown = store.vehicleHistory(for: activeCar.id)
                                 if shown.isEmpty { Text("No entries for this car yet. Tap + to add one.").foregroundStyle(.secondary) }
-                                else { ForEach(shown) { entry in FuelRow(entry: entry) }.onDelete { store.deleteEntry(at: $0, from: shown) } }
+                                else { ForEach(shown) { entry in NavigationLink { FuelEntryDetailView(entry: entry, store: store) } label: { FuelRow(entry: entry) } }.onDelete { store.deleteEntry(at: $0, from: shown) } }
                             }
                         }
                     }
@@ -136,7 +148,7 @@ struct CarProfilesView: View {
                     ForEach(store.carProfiles) { car in
                         HStack {
                             Button { store.activeCarId = car.id } label: {
-                                VStack(alignment: .leading) { Text(car.carNickname).font(.headline); Text("\(car.make) \(car.model) · \(car.tankCapacity, specifier: "%.0f") L · \(car.fuelType.rawValue)").font(.caption).foregroundStyle(.secondary) }
+                                VStack(alignment: .leading) { Text(car.carNickname).font(.headline); Text("\(car.make) \(car.model) · \(car.tankCapacity.map { String(format: "%.0f L", $0) } ?? "Tank size not set") · \(car.fuelType.rawValue)").font(.caption).foregroundStyle(.secondary) }
                             }.buttonStyle(.plain)
                             Spacer(); Button { editing = car } label: { Image(systemName: "pencil") }
                         }
@@ -156,7 +168,13 @@ struct CarProfilesView: View {
 struct CarEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State var car: CarProfile
+    @State private var tankCapacityText: String
     var onSave: (CarProfile) -> Void
+    init(car: CarProfile, onSave: @escaping (CarProfile) -> Void) {
+        _car = State(initialValue: car)
+        _tankCapacityText = State(initialValue: car.tankCapacity.map { String($0) } ?? "")
+        self.onSave = onSave
+    }
     var body: some View {
         NavigationStack {
             Form {
@@ -164,12 +182,12 @@ struct CarEditorView: View {
                     TextField("Nickname", text: $car.carNickname)
                     TextField("Make", text: $car.make)
                     TextField("Model", text: $car.model)
-                    TextField("Tank capacity (L)", value: $car.tankCapacity, format: .number).keyboardType(.decimalPad)
+                    TextField("Tank capacity (L)", text: $tankCapacityText, prompt: Text("e.g. 50")).keyboardType(.decimalPad)
                     Picker("Preferred Fuel", selection: $car.fuelType) { ForEach(FuelType.allCases) { Text($0.rawValue).tag($0) } }
                 }
             }
             .navigationTitle("Car Profile")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") { onSave(car); dismiss() } }; ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") { car.tankCapacity = Double(tankCapacityText); onSave(car); dismiss() } }; ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }.preferredColorScheme(.dark)
     }
 }
@@ -191,20 +209,10 @@ struct FuelEntryView: View {
             Form {
                 Section("Fuel Details") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Picker("Vehicle", selection: $selectedCarId) {
-                            ForEach(store.carProfiles) { car in Text(car.carNickname).tag(car.id) }
-                        }
-                        .onChange(of: selectedCarId) { _, id in
-                            selectedFuel = store.carProfiles.first(where: { $0.id == id })?.fuelType ?? .e10
-                        }
-                        Button { showingAddCar = true } label: {
-                            Label("Add New Car", systemImage: "plus.circle.fill")
-                                .font(.body.weight(.semibold))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
+                        Picker("Vehicle", selection: $selectedCarId) { ForEach(store.carProfiles) { car in Text(car.carNickname).tag(car.id) } }
+                            .onChange(of: selectedCarId) { _, id in selectedFuel = store.carProfiles.first(where: { $0.id == id })?.fuelType ?? .e10 }
+                        Button { showingAddCar = true } label: { Label("Add New Car", systemImage: "plus.circle.fill").font(.body.weight(.semibold)).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()) }
+                            .buttonStyle(.plain).foregroundStyle(.tint)
                     }
                     Picker("Fuel Type", selection: $selectedFuel) { ForEach(FuelType.allCases) { Text($0.rawValue).tag($0) } }
                     DatePicker("Date", selection: $date, displayedComponents: .date)
@@ -214,13 +222,7 @@ struct FuelEntryView: View {
                 }
             }
             .navigationTitle("Add Fuel Entry")
-            .sheet(isPresented: $showingAddCar) {
-                CarEditorView(car: CarProfile(), onSave: { car in
-                    store.addCar(car)
-                    selectedCarId = car.id
-                    selectedFuel = car.fuelType
-                })
-            }
+            .sheet(isPresented: $showingAddCar) { CarEditorView(car: CarProfile(), onSave: { car in store.addCar(car); selectedCarId = car.id; selectedFuel = car.fuelType }) }
             .alert("Invalid fuel entry", isPresented: Binding(get: { validationMessage != nil }, set: { if !$0 { validationMessage = nil } })) { Button("OK", role: .cancel) { validationMessage = nil } } message: { Text(validationMessage ?? "Please check the entered values.") }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Save") {
@@ -230,6 +232,78 @@ struct FuelEntryView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             }
         }.preferredColorScheme(.dark)
+    }
+}
+
+struct FuelEntryDetailView: View {
+    let entry: FuelEntry
+    @ObservedObject var store: FuelStore
+    @State private var photoItem: PhotosPickerItem?
+    @State private var showingReceiptPreview = false
+    private var car: CarProfile? { store.carProfiles.first { $0.id == entry.carId } }
+    private var history: [FuelEntry] { store.vehicleHistory(for: entry.carId) }
+    private var prior: FuelEntry? { store.priorEntry(for: entry) }
+    private var currentEntry: FuelEntry { store.entries.first(where: { $0.id == entry.id }) ?? entry }
+    var body: some View {
+        List {
+            Section("Fill-up") {
+                detailRow("Date", entry.date.formatted(date: .long, time: .omitted))
+                detailRow("Vehicle", car?.carNickname ?? "Unknown vehicle")
+                detailRow("Fuel Type", entry.fuelType.rawValue)
+                detailRow("Litres", String(format: "%.2f L", entry.litres))
+                detailRow("Price per Litre", String(format: "$%.3f", entry.pricePerLitre))
+                detailRow("Total Cost", String(format: "$%.2f", entry.totalCost))
+                detailRow("Odometer", String(format: "%.1f km", entry.odometer))
+            }
+            Section("Efficiency") {
+                if let prior {
+                    let distance = max(0, entry.odometer - prior.odometer)
+                    detailRow("Distance since prior fill-up", String(format: "%.1f km", distance))
+                    if let kmPerLitre = entry.efficiency(distanceDriven: distance) {
+                        detailRow("This interval", String(format: "%.2f km/L · %.2f L/100km", kmPerLitre, 100 / kmPerLitre))
+                    } else { Text("Efficiency unavailable for this fill-up.").foregroundStyle(.secondary) }
+                } else { Text("No prior fill-up with odometer data.").foregroundStyle(.secondary) }
+                if let average = store.vehicleAverageEfficiency(for: entry.carId) {
+                    detailRow("Vehicle average", String(format: "%.2f km/L · %.2f L/100km", average, 100 / average))
+                } else { Text("Vehicle average will appear after a second odometer reading.").foregroundStyle(.secondary) }
+            }
+            Section("Receipt") {
+                if let data = currentEntry.receiptImageData, let image = UIImage(data: data) {
+                    Button { showingReceiptPreview = true } label: { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 180).frame(maxWidth: .infinity) }
+                        .buttonStyle(.plain)
+                    PhotosPicker(selection: $photoItem, matching: .images) { Label("Replace Receipt", systemImage: "arrow.triangle.2.circlepath") }
+                    Button(role: .destructive) { var updated = currentEntry; updated.receiptImageData = nil; store.updateEntry(updated); photoItem = nil } label: { Label("Delete Receipt", systemImage: "trash") }
+                } else {
+                    PhotosPicker(selection: $photoItem, matching: .images) { Label("Attach Receipt", systemImage: "plus.circle.fill") }
+                }
+            }
+            Section("Vehicle Fill-up History") {
+                ForEach(history) { item in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.date.formatted(date: .abbreviated, time: .omitted)).font(.headline)
+                            Text(String(format: "%.1f km · %.2f L · $%.2f", item.odometer, item.litres, item.totalCost)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if item.id == entry.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Fuel Entry")
+        .sheet(isPresented: $showingReceiptPreview) {
+            if let data = currentEntry.receiptImageData, let image = UIImage(data: data) {
+                ZStack { Color.black.ignoresSafeArea(); Image(uiImage: image).resizable().scaledToFit().onTapGesture { showingReceiptPreview = false } }
+            }
+        }
+        .task(id: photoItem) {
+            guard let photoItem, let data = try? await photoItem.loadTransferable(type: Data.self) else { return }
+            var updated = currentEntry; updated.receiptImageData = data; store.updateEntry(updated)
+        }
+        .preferredColorScheme(.dark)
+    }
+    private func detailRow(_ title: String, _ value: String) -> some View {
+        HStack { Text(title); Spacer(); Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
     }
 }
 
