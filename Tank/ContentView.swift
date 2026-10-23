@@ -169,7 +169,7 @@ struct ContentView: View {
             .navigationTitle("Tank")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    ShareLink(item: AppLinks.tankAppStore, subject: Text("Tank - Fuel Tracker"), message: Text("Track your fuel with Tank - Fuel Tracker: \(AppLinks.tankAppStore.absoluteString)")) {
+                    ShareLink(item: Text("Track your fuel with Tank - Fuel Tracker: \(AppLinks.tankAppStore.absoluteString)"), subject: Text("Tank - Fuel Tracker")) {
                         Image(systemName: "square.and.arrow.up").accessibilityLabel("Share Tank")
                     }
                 }
