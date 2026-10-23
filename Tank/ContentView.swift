@@ -38,6 +38,8 @@ private enum AppLinks {
     static let tankAppStore = URL(string: "https://apps.apple.com/au/app/tank-fuel-tracker/id6766018177")!
     static let coastFuelAppStore = URL(string: "https://apps.apple.com/au/app/coastfuel/id6820745150")!
     static let coastFuelApp = URL(string: "coastfuel://")!
+    static let developerX = URL(string: "https://x.com/DavidTo22729509")!
+    static let developerInstagram = URL(string: "https://instagram.com/daveytodd_")!
 }
 
 final class FuelStore: ObservableObject {
@@ -129,6 +131,29 @@ struct ContentView: View {
                                     .buttonStyle(.borderedProminent)
                             }.padding(.vertical, 6)
                         }
+                        Section("About the Developer") {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Dave Todd").font(.headline)
+                                        Text("Daveytodd Inc.").font(.subheadline).foregroundStyle(.secondary)
+                                    }
+                                } icon: {
+                                    Image(systemName: "person.crop.circle.fill").font(.title2).foregroundStyle(.secondary)
+                                }
+                                Divider().overlay(Color.white.opacity(0.12))
+                                Link(destination: AppLinks.developerX) {
+                                    Label("X / Twitter  @DavidTo22729509", systemImage: "at")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Link(destination: AppLinks.developerInstagram) {
+                                    Label("Instagram  @daveytodd_", systemImage: "camera")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .padding(.vertical, 6)
+                            .listRowBackground(Color.black)
+                        }
                         if let activeCar = store.activeCar {
                             Section("\(activeCar.carNickname) Fuel Entries") {
                                 let shown = store.vehicleHistory(for: activeCar.id)
@@ -137,6 +162,8 @@ struct ContentView: View {
                             }
                         }
                     }
+                    .scrollContentBackground(.hidden)
+                    .background(Color.black)
                 }
             }
             .navigationTitle("Tank")
