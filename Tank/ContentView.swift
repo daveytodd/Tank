@@ -3,23 +3,21 @@
 import SwiftUI
 import Combine
 
-// MARK: - Models & Enums
+// MARK: - Models
 
 enum FuelType: String, Codable, CaseIterable, Identifiable {
-    case e10 = "E10/91"
-    case fuel95 = "95"
-    case fuel98 = "98"
-    case diesel = "Diesel"
-    case premiumDiesel = "Premium Diesel"
-    case lpg = "LPG"
+    case e10 = "E10/91", fuel95 = "95", fuel98 = "98", diesel = "Diesel", premiumDiesel = "Premium Diesel", lpg = "LPG"
     var id: String { rawValue }
 }
 
-struct CarProfile: Codable, Hashable {
+struct CarProfile: Codable, Hashable, Identifiable {
+    var id: UUID = UUID()
     var make: String = ""
     var model: String = ""
     var carNickname: String = "My Car"
+    var tankCapacity: Double = 51
     var fuelType: FuelType = .e10
+    var title: String { "\(carNickname) · \(make) \(model)".trimmingCharacters(in: .whitespaces) }
 }
 
 struct FuelEntry: Codable, Identifiable, Hashable {
@@ -28,168 +26,131 @@ struct FuelEntry: Codable, Identifiable, Hashable {
     var odometer: Double
     var litres: Double
     var pricePerLitre: Double
+    var carId: UUID = UUID()
+    var fuelType: FuelType = .e10
     var calculatedEfficiency: Double? = nil
-
     var totalCost: Double { litres * pricePerLitre }
-
-    func efficiency(distanceDriven: Double) -> Double? {
-        guard litres > 0, distanceDriven > 0 else { return nil }
-        return distanceDriven / litres
-    }
+    func efficiency(distanceDriven: Double) -> Double? { litres > 0 && distanceDriven > 0 ? distanceDriven / litres : nil }
 }
-
-// MARK: - Data Store
 
 final class FuelStore: ObservableObject {
     @Published private(set) var entries: [FuelEntry] = []
-    @Published var carProfile: CarProfile = CarProfile() {
-        didSet { save() }
+    @Published var carProfiles: [CarProfile] = [] { didSet { save() } }
+    @Published var activeCarId: UUID = UUID() { didSet { save() } }
+    var activeCar: CarProfile { carProfiles.first(where: { $0.id == activeCarId }) ?? carProfiles[0] }
+    private let entriesKey = "fuelEntries", profilesKey = "carProfiles", activeKey = "activeCarId", legacyKey = "carProfile"
+    init() { load() }
+    func addCar(_ car: CarProfile) { carProfiles.append(car); activeCarId = car.id }
+    func updateCar(_ car: CarProfile) { if let i = carProfiles.firstIndex(where: { $0.id == car.id }) { carProfiles[i] = car } }
+    func deleteCar(_ car: CarProfile) {
+        guard carProfiles.count > 1 else { return }
+        carProfiles.removeAll { $0.id == car.id }
+        if activeCarId == car.id { activeCarId = carProfiles[0].id }
     }
-
-    private let entriesKey = "fuelEntries"
-    private let carProfileKey = "carProfile"
-
-    init() {
-        load()
+    func addEntry(_ entry: FuelEntry) { entries.append(entry); recalculateEfficiencies(); save() }
+    func deleteEntry(at offsets: IndexSet, from shown: [FuelEntry]) {
+        let ids = offsets.map { shown[$0].id }; entries.removeAll { ids.contains($0.id) }; recalculateEfficiencies(); save()
     }
-
-    func addEntry(_ entry: FuelEntry) {
-        entries.append(entry)
-        recalculateEfficiencies()
-        save()
-    }
-
-    func deleteEntry(at offsets: IndexSet) {
-        entries.remove(atOffsets: offsets)
-        recalculateEfficiencies()
-        save()
-    }
-
     private func recalculateEfficiencies() {
-        let sortedEntries = entries.sorted { $0.date < $1.date }
-        var previousOdometer: Double?
-        let updatedEntries = sortedEntries.map { entry -> FuelEntry in
-            var updated = entry
-            if let previous = previousOdometer {
-                let distance = max(0, updated.odometer - previous)
-                updated.calculatedEfficiency = updated.efficiency(distanceDriven: distance)
-            } else {
-                updated.calculatedEfficiency = nil
-            }
-            previousOdometer = updated.odometer
-            return updated
+        let sorted = entries.sorted { $0.date < $1.date }; var previous: [UUID: Double] = [:]
+        entries = sorted.map { entry in
+            var item = entry
+            if let prior = previous[item.carId] { item.calculatedEfficiency = item.efficiency(distanceDriven: max(0, item.odometer - prior)) }
+            else { item.calculatedEfficiency = nil }
+            previous[item.carId] = item.odometer; return item
         }
-        entries = updatedEntries
     }
-
     private func save() {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(entries) {
-            UserDefaults.standard.set(data, forKey: entriesKey)
-        }
-        if let data = try? encoder.encode(carProfile) {
-            UserDefaults.standard.set(data, forKey: carProfileKey)
-        }
+        let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601
+        if let d = try? e.encode(entries) { UserDefaults.standard.set(d, forKey: entriesKey) }
+        if let d = try? e.encode(carProfiles) { UserDefaults.standard.set(d, forKey: profilesKey) }
+        UserDefaults.standard.set(activeCarId.uuidString, forKey: activeKey)
     }
-
     private func load() {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        if let data = UserDefaults.standard.data(forKey: entriesKey),
-           let decoded = try? decoder.decode([FuelEntry].self, from: data) {
-            entries = decoded
-            recalculateEfficiencies()
-        }
-        if let data = UserDefaults.standard.data(forKey: carProfileKey),
-           let decoded = try? decoder.decode(CarProfile.self, from: data) {
-            carProfile = decoded
-        }
+        let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
+        if let data = UserDefaults.standard.data(forKey: entriesKey), let value = try? d.decode([FuelEntry].self, from: data) { entries = value }
+        if let data = UserDefaults.standard.data(forKey: profilesKey), let value = try? d.decode([CarProfile].self, from: data), !value.isEmpty { carProfiles = value }
+        else if let data = UserDefaults.standard.data(forKey: legacyKey), let old = try? d.decode(CarProfile.self, from: data) { carProfiles = [old] }
+        else { carProfiles = [CarProfile(make: "Mazda", model: "3", carNickname: "Max", tankCapacity: 51, fuelType: .e10), CarProfile(make: "Volvo", model: "", carNickname: "Mum's Volvo", tankCapacity: 120, fuelType: .fuel98)] }
+        activeCarId = UserDefaults.standard.string(forKey: activeKey).flatMap(UUID.init(uuidString:)) ?? carProfiles[0].id
+        if !carProfiles.contains(where: { $0.id == activeCarId }) { activeCarId = carProfiles[0].id }
+        recalculateEfficiencies(); save()
     }
 }
-
-// MARK: - Main Views
 
 struct ContentView: View {
     @StateObject private var store = FuelStore()
     @State private var showingAddEntry = false
-
     var body: some View {
         NavigationStack {
             List {
+                Section("Vehicle") {
+                    Picker("Active car", selection: $store.activeCarId) {
+                        ForEach(store.carProfiles) { car in Text(car.carNickname).tag(car.id) }
+                    }.pickerStyle(.menu)
+                    NavigationLink("Manage Car Profiles") { CarProfilesView(store: store) }
+                }
                 Section("Dashboard") {
-                    NavigationLink {
-                        CarProfileView(store: store)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Car Profile").font(.headline)
-                            Text(store.carProfile.carNickname).font(.subheadline).foregroundStyle(.secondary)
-                        }
-                    }
-                    NavigationLink {
-                        FuelChartView(entries: store.entries)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Fuel Analytics").font(.headline)
-                            Text("View price trends over time").font(.subheadline).foregroundStyle(.secondary)
-                        }
+                    NavigationLink { FuelChartView(entries: store.entries, cars: store.carProfiles) } label: {
+                        VStack(alignment: .leading, spacing: 4) { Text("Fuel Analytics").font(.headline); Text("Compare cars and view trends").font(.subheadline).foregroundStyle(.secondary) }
                     }
                 }
-
-                Section("Fuel Entries") {
-                    if store.entries.isEmpty {
-                        Text("No entries yet. Tap + to add one.").foregroundStyle(.secondary)
-                    } else {
-                        ForEach(store.entries.sorted { $0.date > $1.date }) { entry in
-                            FuelRow(entry: entry)
-                        }
-                        .onDelete(perform: store.deleteEntry)
-                    }
+                Section("\(store.activeCar.carNickname) Fuel Entries") {
+                    let shown = store.entries.filter { $0.carId == store.activeCarId }.sorted { $0.date > $1.date }
+                    if shown.isEmpty { Text("No entries for this car yet. Tap + to add one.").foregroundStyle(.secondary) }
+                    else { ForEach(shown) { entry in FuelRow(entry: entry) }.onDelete { store.deleteEntry(at: $0, from: shown) } }
                 }
             }
             .navigationTitle("Tank")
-            .toolbar {
-                Button { showingAddEntry = true } label: { Image(systemName: "plus") }
-            }
-            .sheet(isPresented: $showingAddEntry) {
-                FuelEntryView(store: store)
-            }
+            .toolbar { Button { showingAddEntry = true } label: { Image(systemName: "plus") } }
+            .sheet(isPresented: $showingAddEntry) { FuelEntryView(store: store) }
             .preferredColorScheme(.dark)
         }
     }
 }
 
-// MARK: - Components
-
-struct CarProfileView: View {
+struct CarProfilesView: View {
     @ObservedObject var store: FuelStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var nickname: String = ""
-    @State private var selectedFuel: FuelType = .e10
-
+    @State private var editing: CarProfile?
+    @State private var adding = false
     var body: some View {
-        Form {
-            Section("Vehicle Details") {
-                TextField("Nickname", text: $nickname)
-                Picker("Preferred Fuel", selection: $selectedFuel) {
-                    ForEach(FuelType.allCases) { type in
-                        Text(type.rawValue).tag(type)
-                    }
+        List {
+            ForEach(store.carProfiles) { car in
+                HStack {
+                    Button { store.activeCarId = car.id } label: {
+                        VStack(alignment: .leading) { Text(car.carNickname).font(.headline); Text("\(car.make) \(car.model) · \(car.tankCapacity, specifier: "%.0f") L · \(car.fuelType.rawValue)").font(.caption).foregroundStyle(.secondary) }
+                    }.buttonStyle(.plain)
+                    Spacer()
+                    Button { editing = car } label: { Image(systemName: "pencil") }
+                }
+            }.onDelete { offsets in offsets.map { store.carProfiles[$0] }.forEach(store.deleteCar) }
+            Button { editing = CarProfile(); adding = true } label: { Label("Add Car", systemImage: "plus") }
+        }
+        .navigationTitle("Car Profiles")
+        .sheet(item: $editing) { car in CarEditorView(car: car, onSave: { updated in
+            if adding { store.addCar(updated) } else { store.updateCar(updated) }; adding = false
+        }) }
+    }
+}
+
+struct CarEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var car: CarProfile
+    var onSave: (CarProfile) -> Void
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Vehicle Details") {
+                    TextField("Nickname", text: $car.carNickname)
+                    TextField("Make", text: $car.make)
+                    TextField("Model", text: $car.model)
+                    TextField("Tank capacity (L)", value: $car.tankCapacity, format: .number).keyboardType(.decimalPad)
+                    Picker("Preferred Fuel", selection: $car.fuelType) { ForEach(FuelType.allCases) { Text($0.rawValue).tag($0) } }
                 }
             }
-        }
-        .navigationTitle("Car Profile")
-        .onAppear {
-            nickname = store.carProfile.carNickname
-            selectedFuel = store.carProfile.fuelType
-        }
-        .toolbar {
-            Button("Save") {
-                store.carProfile.carNickname = nickname
-                store.carProfile.fuelType = selectedFuel
-                dismiss()
-            }
-        }
+            .navigationTitle("Car Profile")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") { onSave(car); dismiss() } }; ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }.preferredColorScheme(.dark)
     }
 }
 
@@ -200,12 +161,18 @@ struct FuelEntryView: View {
     @State private var odometerText = ""
     @State private var litresText = ""
     @State private var pricePerLitreText = ""
+    @State private var selectedCarId: UUID
+    @State private var selectedFuel: FuelType
     @State private var validationMessage: String?
-
+    init(store: FuelStore) { self.store = store; _selectedCarId = State(initialValue: store.activeCarId); _selectedFuel = State(initialValue: store.activeCar.fuelType) }
     var body: some View {
         NavigationStack {
             Form {
                 Section("Fuel Details") {
+                    Picker("Vehicle", selection: $selectedCarId) {
+                        ForEach(store.carProfiles) { car in Text(car.carNickname).tag(car.id) }
+                    }.onChange(of: selectedCarId) { _, id in selectedFuel = store.carProfiles.first(where: { $0.id == id })?.fuelType ?? .e10 }
+                    Picker("Fuel Type", selection: $selectedFuel) { ForEach(FuelType.allCases) { Text($0.rawValue).tag($0) } }
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                     TextField("Odometer", text: $odometerText).keyboardType(.decimalPad)
                     TextField("Litres", text: $litresText).keyboardType(.decimalPad)
@@ -213,53 +180,26 @@ struct FuelEntryView: View {
                 }
             }
             .navigationTitle("Add Fuel Entry")
-            .alert("Invalid fuel entry", isPresented: Binding(
-                get: { validationMessage != nil },
-                set: { if !$0 { validationMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) { validationMessage = nil }
-            } message: {
-                Text(validationMessage ?? "Please check the entered values.")
-            }
+            .alert("Invalid fuel entry", isPresented: Binding(get: { validationMessage != nil }, set: { if !$0 { validationMessage = nil } })) { Button("OK", role: .cancel) { validationMessage = nil } } message: { Text(validationMessage ?? "Please check the entered values.") }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        guard let odometer = Double(odometerText), odometer >= 0,
-                              let litres = Double(litresText), litres > 0,
-                              let pricePerLitre = Double(pricePerLitreText), pricePerLitre > 0 else {
-                            validationMessage = "Enter a valid odometer reading, litres greater than zero, and price per litre greater than zero."
-                            return
-                        }
-                        let entry = FuelEntry(date: date, odometer: odometer, litres: litres, pricePerLitre: pricePerLitre)
-                        store.addEntry(entry)
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
+                ToolbarItem(placement: .confirmationAction) { Button("Save") {
+                    guard let odometer = Double(odometerText), odometer >= 0, let litres = Double(litresText), litres > 0, let price = Double(pricePerLitreText), price > 0 else { validationMessage = "Enter valid odometer, litres, and price values."; return }
+                    store.addEntry(FuelEntry(date: date, odometer: odometer, litres: litres, pricePerLitre: price, carId: selectedCarId, fuelType: selectedFuel)); dismiss()
+                } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             }
-        }
+        }.preferredColorScheme(.dark)
     }
 }
 
 struct FuelRow: View {
     let entry: FuelEntry
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(entry.date.formatted(date: .abbreviated, time: .omitted)).font(.headline)
-            HStack {
-                Text(String(format: "%.1f km", entry.odometer))
-                Spacer()
-                Text(String(format: "$%.2f", entry.totalCost))
-            }
-            .font(.subheadline).foregroundStyle(.secondary)
-            if let efficiency = entry.calculatedEfficiency {
-                Text(String(format: "Efficiency: %.2f km/L", efficiency))
-                    .font(.caption).foregroundStyle(.blue)
-            }
-        }
-        .padding(.vertical, 4)
+            HStack { Text(String(format: "%.1f km · %.1f L · %@", entry.odometer, entry.litres, entry.fuelType.rawValue)); Spacer(); Text(String(format: "$%.2f", entry.totalCost)) }
+                .font(.subheadline).foregroundStyle(.secondary)
+            if let efficiency = entry.calculatedEfficiency { Text(String(format: "Efficiency: %.2f km/L", efficiency)).font(.caption).foregroundStyle(.blue) }
+        }.padding(.vertical, 4)
     }
 }
