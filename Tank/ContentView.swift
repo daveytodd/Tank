@@ -34,6 +34,12 @@ struct FuelEntry: Codable, Identifiable, Hashable {
     func efficiency(distanceDriven: Double) -> Double? { litres > 0 && distanceDriven > 0 ? distanceDriven / litres : nil }
 }
 
+private enum AppLinks {
+    static let tankAppStore = URL(string: "https://apps.apple.com/au/app/tank-fuel-tracker/id6766018177")!
+    static let coastFuelAppStore = URL(string: "https://apps.apple.com/au/app/coastfuel/id6820745150")!
+    static let coastFuelApp = URL(string: "coastfuel://")!
+}
+
 final class FuelStore: ObservableObject {
     @Published private(set) var entries: [FuelEntry] = []
     @Published var carProfiles: [CarProfile] = [] { didSet { save() } }
@@ -94,6 +100,7 @@ struct ContentView: View {
     @StateObject private var store = FuelStore()
     @State private var showingAddEntry = false
     @State private var showingAddCar = false
+    @Environment(\.openURL) private var openURL
     var body: some View {
         NavigationStack {
             Group {
@@ -114,6 +121,14 @@ struct ContentView: View {
                                 VStack(alignment: .leading, spacing: 4) { Text("Fuel Analytics").font(.headline); Text("Compare cars and view trends").font(.subheadline).foregroundStyle(.secondary) }
                             }
                         }
+                        Section("Discover CoastFuel") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label("Find cheap fuel nearby with CoastFuel", systemImage: "fuelpump.fill").font(.headline)
+                                Text("Discover nearby fuel prices with CoastFuel.").font(.subheadline).foregroundStyle(.secondary)
+                                Button { openCoastFuel() } label: { Label("Open CoastFuel", systemImage: "arrow.up.right.square") }
+                                    .buttonStyle(.borderedProminent)
+                            }.padding(.vertical, 6)
+                        }
                         if let activeCar = store.activeCar {
                             Section("\(activeCar.carNickname) Fuel Entries") {
                                 let shown = store.vehicleHistory(for: activeCar.id)
@@ -125,10 +140,22 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Tank")
-            .toolbar { if !store.carProfiles.isEmpty { Button { showingAddEntry = true } label: { Image(systemName: "plus") } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    ShareLink(item: AppLinks.tankAppStore, subject: Text("Tank - Fuel Tracker"), message: Text("Track your fuel with Tank - Fuel Tracker: \(AppLinks.tankAppStore.absoluteString)")) {
+                        Image(systemName: "square.and.arrow.up").accessibilityLabel("Share Tank")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) { if !store.carProfiles.isEmpty { Button { showingAddEntry = true } label: { Image(systemName: "plus") } } }
+            }
             .sheet(isPresented: $showingAddEntry) { FuelEntryView(store: store) }
             .sheet(isPresented: $showingAddCar) { CarEditorView(car: CarProfile(), onSave: store.addCar) }
             .preferredColorScheme(.dark).background(Color.black)
+        }
+    }
+    private func openCoastFuel() {
+        UIApplication.shared.open(AppLinks.coastFuelApp) { success in
+            if !success { openURL(AppLinks.coastFuelAppStore) }
         }
     }
 }
