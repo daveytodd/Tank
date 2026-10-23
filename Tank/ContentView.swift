@@ -190,21 +190,22 @@ struct FuelEntryView: View {
         NavigationStack {
             Form {
                 Section("Fuel Details") {
-                    HStack {
+                    VStack(alignment: .leading, spacing: 12) {
                         Picker("Vehicle", selection: $selectedCarId) {
                             ForEach(store.carProfiles) { car in Text(car.carNickname).tag(car.id) }
                         }
-                        Spacer()
-                        Button { showingAddCar = true } label: { Label("Add New Car", systemImage: "plus.circle.fill") }
+                        .onChange(of: selectedCarId) { _, id in
+                            selectedFuel = store.carProfiles.first(where: { $0.id == id })?.fuelType ?? .e10
+                        }
+                        Button { showingAddCar = true } label: {
+                            Label("Add New Car", systemImage: "plus.circle.fill")
+                                .font(.body.weight(.semibold))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
                     }
-                    .sheet(isPresented: $showingAddCar) {
-                        CarEditorView(car: CarProfile(), onSave: { car in
-                            store.addCar(car)
-                            selectedCarId = car.id
-                            selectedFuel = car.fuelType
-                        })
-                    }
-                    .onChange(of: selectedCarId) { _, id in selectedFuel = store.carProfiles.first(where: { $0.id == id })?.fuelType ?? .e10 }
                     Picker("Fuel Type", selection: $selectedFuel) { ForEach(FuelType.allCases) { Text($0.rawValue).tag($0) } }
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                     TextField("Odometer", text: $odometerText).keyboardType(.decimalPad)
@@ -213,6 +214,13 @@ struct FuelEntryView: View {
                 }
             }
             .navigationTitle("Add Fuel Entry")
+            .sheet(isPresented: $showingAddCar) {
+                CarEditorView(car: CarProfile(), onSave: { car in
+                    store.addCar(car)
+                    selectedCarId = car.id
+                    selectedFuel = car.fuelType
+                })
+            }
             .alert("Invalid fuel entry", isPresented: Binding(get: { validationMessage != nil }, set: { if !$0 { validationMessage = nil } })) { Button("OK", role: .cancel) { validationMessage = nil } } message: { Text(validationMessage ?? "Please check the entered values.") }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Save") {
