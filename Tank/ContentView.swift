@@ -63,17 +63,14 @@ final class FuelStore: ObservableObject {
         let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601
         if let d = try? e.encode(entries) { UserDefaults.standard.set(d, forKey: entriesKey) }
         if let d = try? e.encode(carProfiles) { UserDefaults.standard.set(d, forKey: profilesKey) }
-        if let activeCarId { UserDefaults.standard.set(activeCarId.uuidString, forKey: activeKey) }
-        else { UserDefaults.standard.removeObject(forKey: activeKey) }
+        if let activeCarId { UserDefaults.standard.set(activeCarId.uuidString, forKey: activeKey) } else { UserDefaults.standard.removeObject(forKey: activeKey) }
     }
     private func load() {
         let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
         if let data = UserDefaults.standard.data(forKey: entriesKey), let value = try? d.decode([FuelEntry].self, from: data) { entries = value }
-        if let data = UserDefaults.standard.data(forKey: profilesKey), let value = try? d.decode([CarProfile].self, from: data) {
-            carProfiles = value
-        } else if let data = UserDefaults.standard.data(forKey: legacyKey), let old = try? d.decode(CarProfile.self, from: data) {
-            carProfiles = [old]
-        } else { carProfiles = [] }
+        if let data = UserDefaults.standard.data(forKey: profilesKey), let value = try? d.decode([CarProfile].self, from: data) { carProfiles = value }
+        else if let data = UserDefaults.standard.data(forKey: legacyKey), let old = try? d.decode(CarProfile.self, from: data) { carProfiles = [old] }
+        else { carProfiles = [] }
         activeCarId = UserDefaults.standard.string(forKey: activeKey).flatMap(UUID.init(uuidString:))
         if let activeCarId, !carProfiles.contains(where: { $0.id == activeCarId }) { self.activeCarId = carProfiles.first?.id }
         if activeCarId == nil, let first = carProfiles.first { activeCarId = first.id }
@@ -89,16 +86,9 @@ struct ContentView: View {
         NavigationStack {
             Group {
                 if store.carProfiles.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Cars Yet", systemImage: "car.side")
-                    } description: {
-                        Text("Add a vehicle to start tracking your fuel.")
-                    } actions: {
-                        Button("Add First Car") { showingAddCar = true }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
+                    ContentUnavailableView { Label("No Cars Yet", systemImage: "car.side") } description: { Text("Add a vehicle to start tracking your fuel.") } actions: {
+                        Button("Add First Car") { showingAddCar = true }.buttonStyle(.borderedProminent)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black)
                 } else {
                     List {
                         Section("Vehicle") {
@@ -123,13 +113,10 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Tank")
-            .toolbar {
-                if !store.carProfiles.isEmpty { Button { showingAddEntry = true } label: { Image(systemName: "plus") } }
-            }
+            .toolbar { if !store.carProfiles.isEmpty { Button { showingAddEntry = true } label: { Image(systemName: "plus") } } }
             .sheet(isPresented: $showingAddEntry) { FuelEntryView(store: store) }
             .sheet(isPresented: $showingAddCar) { CarEditorView(car: CarProfile(), onSave: store.addCar) }
-            .preferredColorScheme(.dark)
-            .background(Color.black)
+            .preferredColorScheme(.dark).background(Color.black)
         }
     }
 }
@@ -141,16 +128,9 @@ struct CarProfilesView: View {
     var body: some View {
         Group {
             if store.carProfiles.isEmpty {
-                ContentUnavailableView {
-                    Label("No Car Profiles", systemImage: "car.side")
-                } description: {
-                    Text("Create your first profile to get started.")
-                } actions: {
-                    Button("Add First Car") { editing = CarProfile(); adding = true }
-                        .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
+                ContentUnavailableView { Label("No Car Profiles", systemImage: "car.side") } description: { Text("Create your first profile to get started.") } actions: {
+                    Button("Add First Car") { editing = CarProfile(); adding = true }.buttonStyle(.borderedProminent)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black)
             } else {
                 List {
                     ForEach(store.carProfiles) { car in
@@ -158,8 +138,7 @@ struct CarProfilesView: View {
                             Button { store.activeCarId = car.id } label: {
                                 VStack(alignment: .leading) { Text(car.carNickname).font(.headline); Text("\(car.make) \(car.model) · \(car.tankCapacity, specifier: "%.0f") L · \(car.fuelType.rawValue)").font(.caption).foregroundStyle(.secondary) }
                             }.buttonStyle(.plain)
-                            Spacer()
-                            Button { editing = car } label: { Image(systemName: "pencil") }
+                            Spacer(); Button { editing = car } label: { Image(systemName: "pencil") }
                         }
                     }.onDelete { offsets in offsets.map { store.carProfiles[$0] }.forEach(store.deleteCar) }
                     Button { editing = CarProfile(); adding = true } label: { Label("Add Car", systemImage: "plus") }
@@ -170,8 +149,7 @@ struct CarProfilesView: View {
         .sheet(item: $editing) { car in CarEditorView(car: car, onSave: { updated in
             if adding { store.addCar(updated) } else { store.updateCar(updated) }; adding = false
         }) }
-        .preferredColorScheme(.dark)
-        .background(Color.black)
+        .preferredColorScheme(.dark).background(Color.black)
     }
 }
 
@@ -206,14 +184,27 @@ struct FuelEntryView: View {
     @State private var selectedCarId: UUID
     @State private var selectedFuel: FuelType
     @State private var validationMessage: String?
+    @State private var showingAddCar = false
     init(store: FuelStore) { self.store = store; _selectedCarId = State(initialValue: store.activeCarId ?? store.carProfiles[0].id); _selectedFuel = State(initialValue: store.activeCar?.fuelType ?? .e10) }
     var body: some View {
         NavigationStack {
             Form {
                 Section("Fuel Details") {
-                    Picker("Vehicle", selection: $selectedCarId) {
-                        ForEach(store.carProfiles) { car in Text(car.carNickname).tag(car.id) }
-                    }.onChange(of: selectedCarId) { _, id in selectedFuel = store.carProfiles.first(where: { $0.id == id })?.fuelType ?? .e10 }
+                    HStack {
+                        Picker("Vehicle", selection: $selectedCarId) {
+                            ForEach(store.carProfiles) { car in Text(car.carNickname).tag(car.id) }
+                        }
+                        Spacer()
+                        Button { showingAddCar = true } label: { Label("Add New Car", systemImage: "plus.circle.fill") }
+                    }
+                    .sheet(isPresented: $showingAddCar) {
+                        CarEditorView(car: CarProfile(), onSave: { car in
+                            store.addCar(car)
+                            selectedCarId = car.id
+                            selectedFuel = car.fuelType
+                        })
+                    }
+                    .onChange(of: selectedCarId) { _, id in selectedFuel = store.carProfiles.first(where: { $0.id == id })?.fuelType ?? .e10 }
                     Picker("Fuel Type", selection: $selectedFuel) { ForEach(FuelType.allCases) { Text($0.rawValue).tag($0) } }
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                     TextField("Odometer", text: $odometerText).keyboardType(.decimalPad)
